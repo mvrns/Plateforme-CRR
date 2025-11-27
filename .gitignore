@@ -1,0 +1,79 @@
+# ===============================================
+# 1. IGNORER les dossiers et fichiers Python de base
+# ===============================================
+
+# Fichiers de compilation et caches Python
+__pycache__/
+*.pyc
+*.pyd
+*.so
+.Python
+build/
+dist/
+eggs/
+*.egg-info/
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+/venv
+/env
+pip-log.txt
+
+# ===============================================
+# 2. IGNORER les fichiers des Outils de Data Science
+# ===============================================
+
+# Jupyter / Colab / VS Code Notebooks
+.ipynb_checkpoints/
+# Les fichiers de sorties des notebooks peuvent être très volumineux
+*.nbdata
+# Fichiers de session VS Code
+.vscode/
+
+# Fichiers Matplotlib / Streamlit
+*.png
+*.jpg
+*.jpeg
+*.svg
+# Vous pouvez laisser les images si elles sont fixes et font partie du contenu
+# Sinon, ignorez les sorties de tracés (plots)
+
+# Fichiers de configuration Streamlit temporaires
+.streamlit/
+
+# ===============================================
+# 3. IGNORER les données & les sorties locales
+# ===============================================
+
+# Données brutes (trop volumineuses pour Git)
+# N'envoyez pas de gros fichiers de données dans un repo public.
+# Conservez-les dans le dossier data/ mais ignorez les fichiers volumineux.
+data/
+*.csv
+*.xlsx
+*.parquet
+
+# Fichiers de log
+*.log
+
+# Fichiers de sortie du modèle
+# Les modèles sauvegardés (ex: pickle, joblib) sont souvent volumineux
+*.pkl
+*.joblib
+*.h5
+
+# ===============================================
+# 4. IGNORER les fichiers spécifiques à l'OS ou sensibles
+# ===============================================
+
+# Mac OS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Fichiers sensibles (Mots de passe, clés, tokens)
+.env
+.secret
