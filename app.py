@@ -2,144 +2,239 @@
 import datetime 
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import pandas as pd 
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from src.model.option_pricer import price_option_euro_amer, ReplicatingResult
 from src.model.objective_func import optimize_u_d_from_ticker
 from src.data_loader.data_utils import fetch_stock_history 
+from src.model.greeks_calculator import calculate_greeks_at_t0, plot_greeks_vs_price 
+from src.model.monte_carlo_pricer import monte_carlo_option_price
+from src.model.bs_pricer import black_scholes_price, plot_discretization_analysis
 
-# Fonction de traçage Heatmap
-def plot_heatmap_matrices(result: ReplicatingResult, n: int, option_type: str):
 
+# HEATMAP PLOTTING FUNCTION
+def plot_heatmap_matrices_plotly(result: ReplicatingResult, n: int, option_type: str):
+    """Creates an interactive Heatmap chart for Delta and Psi."""
+    
     delta_data = result.Delta_amer
     psi_data = result.Psi_amer
     
-    fig, axes = plt.subplots(1, 2, figsize=(18, 7), sharey=True)
-    fig.suptitle(f'Couverture Dynamique ({option_type.capitalize()} Américain)', fontsize=16)
+    df_delta = pd.DataFrame(delta_data.T, index=[f"J={j}" for j in range(delta_data.shape[1])], columns=[f"i={i}" for i in range(delta_data.shape[0])]).iloc[::-1]
+    df_psi = pd.DataFrame(psi_data.T, index=[f"J={j}" for j in range(psi_data.shape[1])], columns=[f"i={i}" for i in range(psi_data.shape[0])]).iloc[::-1]
 
-    # Heatmap de Delta
-    sns.heatmap(
-        delta_data.T, ax=axes[0], cmap="RdYlBu", 
-        cbar_kws={'label': 'Delta (Nombre d\'actions)'}, 
-        linewidths=.5, linecolor='lightgray', annot=False
+    fig_combined = make_subplots(
+        rows=1, cols=2, 
+        subplot_titles=('Delta Matrix (Price Sensitivity)', 'Psi Matrix (Risk-Free Investment)')
     )
-    axes[0].set_title(r'Matrice $\Delta$ (Sensibilité au Prix)', fontsize=14)
-    axes[0].set_xlabel('Temps (i: de 0 à N-1)')
-    axes[0].set_ylabel('Nombre de Mouvements Haussiers (j)')
-    axes[0].invert_yaxis()
 
-    # Heatmap de Psi
-    sns.heatmap(
-        psi_data.T, ax=axes[1], cmap="viridis", 
-        cbar_kws={'label': r'$\Psi$ (Montant sans risque)'},
-        linewidths=.5, linecolor='lightgray', annot=False
+    fig_combined.add_trace(go.Heatmap(
+        z=df_delta.values, x=df_delta.columns, y=df_delta.index, colorscale="RdYlBu", name='Delta',
+        coloraxis='coloraxis1', hovertemplate='Time: %{x}<br>Up Moves: %{y}<br>Delta: %{z:.4f}<extra></extra>'
+    ), row=1, col=1)
+    
+    fig_combined.add_trace(go.Heatmap(
+        z=df_psi.values, x=df_psi.columns, y=df_psi.index, colorscale="Viridis", name='Psi',
+        coloraxis='coloraxis2', hovertemplate='Time: %{x}<br>Up Moves: %{y}<br>Psi: %{z:.4f}<extra></extra>'
+    ), row=1, col=2)
+    
+    fig_combined.update_layout(
+        title_text=f"Dynamic Hedging ({option_type.capitalize()} American)",
+        height=700, template='plotly_white',
+        coloraxis1=dict(colorscale="RdYlBu", colorbar=dict(title="Delta (Shares)", x=0.45, len=0.9)),
+        coloraxis2=dict(colorscale="Viridis", colorbar=dict(title="Psi (Risk-Free Amount)", x=1.0))
     )
-    axes[1].set_title(r'Matrice $\Psi$ (Investissement sans Risque)', fontsize=14)
-    axes[1].set_xlabel('Temps (i: de 0 à N-1)')
     
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig_combined.update_xaxes(title_text='Time (i: from 0 to N-1)')
+    fig_combined.update_yaxes(title_text='Number of Up Moves (j)', row=1, col=1)
+    fig_combined.update_yaxes(showticklabels=False, row=1, col=2) 
     
-    return fig 
+    return fig_combined
 
-# Interface 
+
+# MAIN CALCULATION LOGIC
 def run_pricing_and_display(
-    ticker: str, start: str, end: str, K: float, r: float,
+    ticker: str, start: str, end: str, K: float, r: float, 
     n: int = 50, option_type: str = "call", T: float = 1.0,
 ):
-    st.info(f"Optimizing u and d for {ticker}...")
+    
+    st.markdown("---")
+    st.header("🔍 Calibration Status and Current Data")
+    
+    # 0. Calibration and Data Retrieval
+    
+    st.info(f"Attempting to calibrate u and d parameters for **{ticker}**...")
     
     try:
         u_opt, d_opt = optimize_u_d_from_ticker(ticker, start, end)
+        st.success(f"Calibration successful. Optimal u = {u_opt:.6f}, d = {d_opt:.6f}")
     except ValueError as e:
-        st.error(f"Erreur de Calibration: {e}")
+        st.error(f"Calibration Error: {e}")
         return
-        
-    st.success(f"Optimal u = {u_opt:.6f}, d = {d_opt:.6f}")
-    
+
     try:
         data = fetch_stock_history(ticker, start, end)
         last_price = float(data.iloc[-1])
-        st.write(f"Prix actuel de l'action (S0) = **{last_price:.2f}**")
+        st.markdown(f"**Current Spot Price (S0) used:** **{last_price:.2f}**")
     except Exception:
-        st.error("Impossible de récupérer l'historique de l'action.")
+        st.error("Failed to retrieve stock history.")
         return
 
+    # 1. Implicit volatility and consistency calculation
+    N_calibre = n 
+    dt_calibre = T / N_calibre
+    
+    if u_opt <= 0 or d_opt <= 0:
+        st.error("Cannot calculate implied volatility because u or d are non-positive.")
+        return
+    
+    # Implied Sigma derived from calibration
+    sigma_implied = np.log(u_opt / d_opt) / (2 * np.sqrt(dt_calibre))
+    st.markdown(f"**Implied Model Volatility (σ) used for BS/MC:** `{sigma_implied:.4f}`")
+
+
+    # 2. Main Calculation (CRR)
     result = price_option_euro_amer(
         S0=last_price, K=K, r=r, u=u_opt, d=d_opt, n=n, option_type=option_type, T=T
     )
 
-    st.header(" Résultats de Valorisation")
-    st.markdown(f"""
-    * **Prix Américain:** `{result.price_amer:.4f}`
-    * **Prix Européen:** `{result.price_euro:.4f}`
-    """)
+    # 3. Black-Scholes Calculation
+    bs_price = black_scholes_price(last_price, K, r, T, sigma_implied, option_type)
+
+    # 4. Monte Carlo Calculation
+    N_sims = 100000 
+    N_steps = 252 
+    mc_price = monte_carlo_option_price(
+        S0=last_price, K=K, r=r, T=T, sigma=sigma_implied, N_simulations=N_sims, N_pas=N_steps, option_type=option_type
+    )
+
+    st.markdown("---")
+    st.header("💰 Valuation and Hedging Results")
     
-    st.header(" Couverture Initiale (t=0)")
+    # PRESENTATION 1: Price Comparison
+    
+    col_amer, col_euro, col_bs, col_mc = st.columns(4)
+    
+    col_amer.metric("American CRR Price", f"{result.price_amer:.4f}")
+    col_euro.metric(f"European CRR Price (N={n})", f"{result.price_euro:.4f}")
+    col_bs.metric("Black-Scholes Price", f"{bs_price:.4f}")
+    col_mc.metric("Monte Carlo Price", f"{mc_price:.4f}", help=f"Based on {N_sims} simulations")
+    
+    # Initial Hedging t=0
+    st.markdown("### Initial Hedging (t=0)")
     st.table(pd.DataFrame({
-        'Paramètre': ['Delta Américain', 'Psi Américain'],
-        'Valeur': [f"{result.Delta_amer[0, 0]:.4f}", f"{result.Psi_amer[0, 0]:.4f}"]
+        'Parameter': ['American Delta', 'American Psi'],
+        'Value': [f"{result.Delta_amer[0, 0]:.4f}", f"{result.Psi_amer[0, 0]:.4f}"]
     }))
 
-    st.header(" Stratégie de Couverture Dynamique (Heatmaps)")
-    fig = plot_heatmap_matrices(result, n, option_type)
-    st.pyplot(fig)
+    # PRESENTATION 2: Graphical Analysis
+    
+    # Expander 1: Greeks
+    with st.expander("📈 Sensitivity Analysis (Greeks vs. Spot Price)", expanded=False):
+        st.subheader(f"European Option Greeks Analysis")
+        
+        # Greeks Calculation 
+        price_range = np.linspace(last_price * 0.6, last_price * 1.4, 100)
+        greeks_list = []
+        
+        for S_val in price_range:
+            greeks = calculate_greeks_at_t0(
+                S0=S_val, K=K, r=r, u=u_opt, d=d_opt, n=n, option_type=option_type, T=T
+            )
+            greeks_list.append({
+                        'S': S_val, 
+                        'Price': greeks.Price, 
+                        'Delta': greeks.Delta, 
+                        'Gamma': greeks.Gamma,
+                        'Vega': greeks.Vega,
+                        'Theta': greeks.Theta,
+                        'Rho': greeks.Rho
+                    })
+            
+        greeks_df = pd.DataFrame(greeks_list)
+
+        fig_greeks = plot_greeks_vs_price(greeks_df, option_type)
+        st.plotly_chart(fig_greeks, use_container_width=True)
+
+    # Expander 2: Hedging Strategy
+    with st.expander("🗺️ Dynamic Hedging Strategy (Heatmaps)", expanded=False):
+        st.subheader("Hedging Lattice Visualization (CRR)")
+        fig_heatmap = plot_heatmap_matrices_plotly(result, n, option_type)
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+
+    # Expander 3: Stability Analysis
+    with st.expander("📊 Stability Analysis (CRR Price vs N)", expanded=False):
+        st.subheader("Convergence Stability (based on Implied Volatility)")
+
+        bs_price_ref = black_scholes_price(last_price, K, r, T, sigma_implied, option_type)
+        st.markdown(f"**Black-Scholes Limit Price (Reference):** `{bs_price_ref:.4f}`")
+
+        # Stability Loop (uses variable u and d for convergence)
+        N_range = np.arange(10, 501, 10)
+        stability_list = []
+
+        for N_val in N_range:
+            dt_stab = T / N_val
+            
+            u_stab = np.exp(sigma_implied * np.sqrt(dt_stab))
+            d_stab = np.exp(-sigma_implied * np.sqrt(dt_stab))
+            
+            try:
+                price_stab = price_option_euro_amer(
+                    S0=last_price, K=K, r=r, u=u_stab, d=d_stab, n=N_val, option_type=option_type, T=T
+                ).price_euro
+                stability_list.append({'N': N_val, 'CRR_Price': price_stab})
+            except ValueError:
+                stability_list.append({'N': N_val, 'CRR_Price': np.nan})
+
+        stability_df = pd.DataFrame(stability_list).dropna()
+
+        if not stability_df.empty:
+            fig_stability = plot_discretization_analysis(stability_df, bs_price_ref, option_type)
+            st.plotly_chart(fig_stability, use_container_width=True)
+        else:
+            st.warning("Cannot plot stability. Check initial u and d parameters.")
 
 
-# Streamlit
+# STREAMLIT CONFIGURATION AND MAIN
 def main():
     
     st.set_page_config(layout="wide", page_title="CRR Option Pricer")
     st.title("Binomial Option Pricer (CRR) & Hedging")
 
-    st.sidebar.header("Paramètres du Modèle")
+    # PART 1: SIDEBAR (PARAMETERS)
+    with st.sidebar:
+        st.header("Model Parameters")
+        
+        # Input Parameters
+        ticker = st.text_input("Stock Symbol (Ticker)", value="AAPL")
+        option_type = st.selectbox("Option Type", options=['call', 'put'])
+        K = st.number_input("Strike Price (K)", value=180.0, step=1.0)
+        r = st.slider("Risk-Free Rate (r)", min_value=0.01, max_value=0.10, value=0.05, step=0.005)
+        T = st.slider("Time to Maturity (years)", min_value=0.25, max_value=2.0, value=1.0, step=0.25)
+        n = st.slider("Number of Steps (N) - Calibration/CRR", min_value=10, max_value=300, value=50, step=10)
+        
+        today = datetime.date.today()
+        one_year_ago = today - datetime.timedelta(days=365)
+        start_date_input = st.date_input("Start Date", value=one_year_ago, max_value=today)
+        end_date_input = st.date_input("End Date", value=today, max_value=today)
+        start_date_str = start_date_input.strftime("%Y-%m-%d")
+        end_date_str = end_date_input.strftime("%Y-%m-%d")
+        
+    # PART 2: RESULTS AREA
+    params = {
+        'ticker': ticker, 'start': start_date_str, 'end': end_date_str, 
+        'K': K, 'r': r, 'n': n, 
+        'option_type': option_type, 'T': T
+    }
     
-    # --- 1. Paramètres de l'Option ---
-    st.sidebar.subheader("Option et Taux")
-    ticker = st.sidebar.text_input("Symbole Boursier (Ticker)", value="AAPL")
-    option_type = st.sidebar.selectbox("Type d'Option", options=['call', 'put'])
-    K = st.sidebar.number_input("Prix d'Exercice (K)", value=180.0, step=1.0)
-    r = st.sidebar.slider("Taux sans Risque (r)", min_value=0.01, max_value=0.10, value=0.05, step=0.005)
+    st.markdown("---")
     
-    # --- 2. Paramètres du Modèle ---
-    st.sidebar.subheader("Horizon et Discrétisation")
-    T = st.sidebar.slider("Temps à Maturité (années)", min_value=0.25, max_value=2.0, value=1.0, step=0.25)
-    n = st.sidebar.slider("Nombre d'Étapes (N)", min_value=10, max_value=200, value=50, step=10)
-    
-    # --- 3. Paramètres de Calibration ---
-    st.sidebar.subheader("Calibration (Historique)")
-    
-    # Dates par défaut
-    today = datetime.date.today()
-    one_year_ago = today - datetime.timedelta(days=365)
-    
-    # Widgets d'entrée de date
-    start_date_input = st.sidebar.date_input(
-        "Date de Début (Calibration)", 
-        value=one_year_ago,
-        max_value=today
-    )
-    end_date_input = st.sidebar.date_input(
-        "Date de Fin (Calibration)", 
-        value=today,
-        max_value=today
-    )
-    
-    # Convertir les objets date en chaînes de caractères "YYYY-MM-DD"
-    start_date_str = start_date_input.strftime("%Y-%m-%d")
-    end_date_str = end_date_input.strftime("%Y-%m-%d")
-
-
-    if st.sidebar.button("Calculer le Prix"):
+    if st.button("CALCULATE PRICE AND ANALYSIS", type="primary"):
         if start_date_input >= end_date_input:
-            st.sidebar.error("La date de début doit être antérieure à la date de fin.")
+            st.error("The start date must be before the end date.")
         else:
-            run_pricing_and_display(
-                ticker=ticker, 
-                start=start_date_str, 
-                end=end_date_str,     
-                K=K, r=r, n=n, option_type=option_type, T=T
-            )
-
+            run_pricing_and_display(**params)
+    
 if __name__ == '__main__':
     main()
