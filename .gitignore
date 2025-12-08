@@ -21,6 +21,8 @@ env/
 /env
 pip-log.txt
 
+#autre
+*.pdf
 # ===============================================
 # 2. IGNORER les fichiers des Outils de Data Science
 # ===============================================
