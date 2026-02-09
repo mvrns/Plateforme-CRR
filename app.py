@@ -11,6 +11,7 @@ from src.data_loader.data_utils import fetch_stock_history
 from src.model.greeks_calculator import calculate_greeks_at_t0, plot_greeks_vs_price 
 from src.model.monte_carlo_pricer import monte_carlo_option_price
 from src.model.bs_pricer import black_scholes_price, plot_discretization_analysis
+from src.model.sabr_pricer import plot_sabr_analysis
 
 
 # HEATMAP PLOTTING FUNCTION
@@ -196,17 +197,46 @@ def run_pricing_and_display(
             st.warning("Cannot plot stability. Check initial u and d parameters.")
 
 
+    st.markdown("---")
+    st.header("SABR Model Analysis")
+    st.info("Ajust volatility parameters")
+
+    col_sabr1, col_sabr2, col_sabr3, col_sabr4 = st.columns(4)
+    with col_sabr1: 
+        alpha = st.number_input("Alpha (Level)", 0.01, 2.0, 0.3, 0.05)
+    with col_sabr2: 
+        beta = st.number_input("Beta (Elasticity)", 0.0, 1.0, 0.5, 0.1)
+    with col_sabr3: 
+        rho = st.slider("Rho (Correlation)", -0.99, 0.99, -0.4, 0.05)
+    with col_sabr4: 
+        nu = st.number_input("Nu (Vol of Vol)", 0.0, 5.0, 0.4, 0.1)
+
+    fig_sabr, price_sabr, vol_sabr = plot_sabr_analysis(
+        last_price, K, r, T, option_type, alpha, beta, rho, nu
+    )
+
+    c_met1, c_met2 = st.columns(2)
+    c_met1.metric(f"SABR Implied Vol (at K={K})", f"{vol_sabr:.2%}")
+    c_met2.metric(f"SABR Price (at K={K})", f"{price_sabr:.4f}")
+
+    st.plotly_chart(fig_sabr, use_container_width=True)
+
+
 # STREAMLIT CONFIGURATION AND MAIN
+# REMPLACE TOUTE LA FONCTION main() PAR CELLE-CI :
+
 def main():
-    
     st.set_page_config(layout="wide", page_title="CRR Option Pricer")
     st.title("Binomial Option Pricer (CRR) & Hedging")
 
-    # PART 1: SIDEBAR (PARAMETERS)
+    # --- 1. INITIALISATION DE LA MÉMOIRE (SESSION STATE) ---
+    if 'results_calculated' not in st.session_state:
+        st.session_state.results_calculated = False
+
+    # --- 2. SIDEBAR (PARAMÈTRES) ---
     with st.sidebar:
         st.header("Model Parameters")
         
-        # Input Parameters
         ticker = st.text_input("Stock Symbol (Ticker)", value="AAPL")
         option_type = st.selectbox("Option Type", options=['call', 'put'])
         K = st.number_input("Strike Price (K)", value=180.0, step=1.0)
@@ -221,7 +251,6 @@ def main():
         start_date_str = start_date_input.strftime("%Y-%m-%d")
         end_date_str = end_date_input.strftime("%Y-%m-%d")
         
-    # PART 2: RESULTS AREA
     params = {
         'ticker': ticker, 'start': start_date_str, 'end': end_date_str, 
         'K': K, 'r': r, 'n': n, 
@@ -231,10 +260,13 @@ def main():
     st.markdown("---")
     
     if st.button("CALCULATE PRICE AND ANALYSIS", type="primary"):
+        st.session_state.results_calculated = True
+
+    if st.session_state.results_calculated:
         if start_date_input >= end_date_input:
             st.error("The start date must be before the end date.")
         else:
             run_pricing_and_display(**params)
-    
+
 if __name__ == '__main__':
     main()
