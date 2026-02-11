@@ -12,6 +12,7 @@ from src.model.greeks_calculator import calculate_greeks_at_t0, plot_greeks_vs_p
 from src.model.monte_carlo_pricer import monte_carlo_option_price
 from src.model.bs_pricer import black_scholes_price, plot_discretization_analysis
 from src.model.sabr_pricer import plot_sabr_analysis
+from src.model.heston_pricer import plot_heston_analysis, heston_option_price_mc
 
 
 # HEATMAP PLOTTING FUNCTION
@@ -221,6 +222,39 @@ def run_pricing_and_display(
 
     st.plotly_chart(fig_sabr, use_container_width=True)
 
+        st.markdown("---")
+    st.header("Heston Model Analysis")
+    st.info("Stochastic volatility (Heston) via Monte Carlo (Euler full truncation)")
+
+    col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns(5)
+    with col_h1:
+        v0 = st.number_input("v0 (initial variance)", 1e-6, 2.0, 0.04, 0.01)
+    with col_h2:
+        kappa = st.number_input("kappa (mean reversion)", 0.01, 20.0, 2.0, 0.5)
+    with col_h3:
+        theta = st.number_input("theta (long-run variance)", 1e-6, 2.0, 0.04, 0.01)
+    with col_h4:
+        xi = st.number_input("xi (vol of vol)", 0.001, 10.0, 0.5, 0.1)
+    with col_h5:
+        rho = st.slider("rho (corr)", -0.99, 0.99, -0.5, 0.05)
+
+    h_steps = st.slider("Heston steps (Euler)", 50, 1000, 252, 50)
+    h_sims = st.slider("Heston simulations", 10_000, 300_000, 50_000, 10_000)
+
+    fig_heston, price_heston, vol_heston = plot_heston_analysis(
+        last_price, K, r, T, option_type,
+        v0=v0, kappa=kappa, theta=theta, xi=xi, rho=rho,
+        n_steps=h_steps, n_sims=h_sims, seed=42
+    )
+
+    c_hm1, c_hm2 = st.columns(2)
+    c_hm1.metric(f"Heston Price (at K={K})", f"{price_heston:.4f}")
+    if np.isnan(vol_heston):
+        c_hm2.metric(f"BS Implied Vol (from Heston, at K={K})", "n/a")
+    else:
+        c_hm2.metric(f"BS Implied Vol (from Heston, at K={K})", f"{vol_heston:.2%}")
+
+    st.plotly_chart(fig_heston, use_container_width=True)
 
 # STREAMLIT CONFIGURATION AND MAIN
 # REMPLACE TOUTE LA FONCTION main() PAR CELLE-CI :
