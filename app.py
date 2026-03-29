@@ -221,8 +221,7 @@ def run_pricing_and_display(
     c_met2.metric(f"SABR Price (at K={K})", f"{price_sabr:.4f}")
 
     st.plotly_chart(fig_sabr, use_container_width=True)
-
-        st.markdown("---")
+    st.markdown("---")
     st.header("Heston Model Analysis")
     st.info("Stochastic volatility (Heston) via Monte Carlo (Euler full truncation)")
 

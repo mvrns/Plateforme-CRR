@@ -4,39 +4,57 @@ from plotly.subplots import make_subplots
 from .bs_pricer import black_scholes_price
 
 def sabr_volatility(F, K, T, alpha, beta, rho, nu):
+    """
+    Computes the SABR implied volatility using Hagan's formula.
+    this is used to model the volatiklity smile in the market.
+    """
+
+    # check for invalid finput inputs
     if K <= 0 or F <= 0: return 0.0
     
     log_FK = np.log(F / K)
     
+    # at the money case (F = K) to avoid division by zero
     if abs(log_FK) < 1e-8:
         term1 = alpha / (F ** (1 - beta))
         term2 = 1 + ( ((1 - beta)**2 / 24) * (alpha**2 / (F**(2 - 2*beta))) + (rho * beta * nu * alpha) / (4 * (F**(1 - beta))) + ((2 - 3 * rho**2) * nu**2) / 24 ) * T
         return term1 * term2
 
+    # Standard SABR expenssion variables 
     z = (nu / alpha) * ((F * K) ** ((1 - beta) / 2)) * log_FK
     
+    # Compute x(z), checking for edge cases where z is near zero
     if abs(z) < 1e-8:
         x_z = 1.0
     else:
         sqrt_term = np.sqrt(1 - 2 * rho * z + z**2)
         x_z = np.log((sqrt_term + z - rho) / (1 - rho)) / z
 
+    # formula denominator and time dependent correction factor
     denominator = ((F * K) ** ((1 - beta) / 2)) * (1 + ((1 - beta)**2 / 24) * log_FK**2 + ((1 - beta)**4 / 1920) * log_FK**4)
     numerator = alpha * z
     
     correction = 1 + ( ((1 - beta)**2 / 24) * (alpha**2 / ((F * K)**(1 - beta))) + (rho * beta * nu * alpha) / (4 * ((F * K)**((1 - beta) / 2))) + ((2 - 3 * rho**2) * nu**2) / 24 ) * T
     
+    # Combine components to get the implied volatility
     implied_vol = (alpha / denominator) * (z / x_z) * correction
     
     return implied_vol
 
 def plot_sabr_analysis(S0, K_target, r, T, option_type, alpha, beta, rho, nu):
+    """
+    Generates a plot of the SABR implied volatility smile and the corresponding option price.
+    returns the figure object, the option price at the target strike, and the implied volatility.
+    """
+
+    # Define Forward price and the strike range for the plot
     F0 = S0 * np.exp(r * T)
     
     strikes = np.linspace(F0 * 0.5, F0 * 1.5, 100)
     vols = []
     prices_sabr = []
     
+    # Compute volatility and price for each strike point on the graph
     for K_val in strikes:
         vol = sabr_volatility(F0, K_val, T, alpha, beta, rho, nu)
         vols.append(vol)
@@ -67,6 +85,7 @@ def plot_sabr_analysis(S0, K_target, r, T, option_type, alpha, beta, rho, nu):
     fig.update_yaxes(title_text="Implied Volatility", secondary_y=False)
     fig.update_yaxes(title_text="Option Price", secondary_y=True)
     
+    # Calculate specific outputs for the target strike
     vol_atm = sabr_volatility(F0, K_target, T, alpha, beta, rho, nu)
     final_price = black_scholes_price(S0, K_target, r, T, vol_atm, option_type)
     
